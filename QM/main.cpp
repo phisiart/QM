@@ -4,6 +4,8 @@
 #include <vector>
 
 const int MAX_SIZE = 10;
+size_t length = 10;
+
 //typedef std::bitset<MAX_SIZE> Atom;
 
 class Atom : public std::bitset<MAX_SIZE> {
@@ -18,15 +20,22 @@ public:
         return (std::bitset<MAX_SIZE>::operator==(rhs)) && (barbits == rhs.barbits);
     }
 
+    bool Cover(const std::bitset<MAX_SIZE>& minterm) {
+        std::bitset<MAX_SIZE> compare = std::bitset<MAX_SIZE>(*this) ^ minterm;
+        return ((compare | barbits) == barbits);
+    }
+
     // flag:
     // -1: invalid: something wrong.
     //  0: prime.
     //  1: merged.
     int flag;
+    //size_t length;
+    
 };
 
 std::ostream& operator<<(std::ostream& os, const Atom& atom) {
-    for (int i = MAX_SIZE - 1; i >= 0; --i) {
+    for (int i = length - 1; i >= 0; --i) {
         os << (atom.barbits.at(i) ? '-' : (atom.at(i) ? '1' : '0'));
     }
     os << ' ' << (atom.flag ? 'm' : '*');
@@ -72,6 +81,111 @@ std::ostream& operator<<(std::ostream& os, const Column& column) {
     return os;
 }
 
+
+class MatchTable {
+public:
+    std::vector<Atom> primes;
+    std::vector<Atom> minterms;
+    std::vector<std::vector<bool> > checked;
+
+    void ConstructCheckList() {
+        checked.resize(minterms.size());
+        for (size_t i = 0; i < checked.size(); ++i) {
+            checked[i].resize(primes.size());
+            // todo...
+            for (size_t j = 0; j < primes.size(); ++j) {
+                if (primes[j].Cover(minterms[i])) {
+                    checked[i][j] = true;
+                } else {
+                    checked[i][j] = false;
+                }
+            }
+        }
+    }
+
+    std::vector<Atom> GetAnswer() {
+        std::vector<Atom> ret;
+        if (minterms.empty()) {
+            return ret;
+        }
+
+        // Step 1. Find those minterms that are only covered by a single prime.
+        for (size_t i = 0; i < minterms.size(); ++i) {
+            if (std::count(checked[i].cbegin(), checked[i].cend(), true) == 1) {
+                size_t minterm_found = i;
+                size_t prime_found = std::find(checked[i].cbegin(), checked[i].cend(), true) - checked[i].cbegin();
+
+                ret.push_back(primes[prime_found]);
+                
+                MatchTable next;
+                for (size_t j = 0; j < minterms.size(); ++j) {
+                    if (!checked[j][prime_found]) {
+                        next.minterms.push_back(minterms[j]);
+                    }
+                }
+                for (size_t j = 0; j < primes.size(); ++j) {
+                    if (j != prime_found) {
+                        next.primes.push_back(primes[j]);
+                    }
+                }
+                next.ConstructCheckList();
+                std::vector<Atom> append(next.GetAnswer());
+                ret.insert(ret.cend(), append.begin(), append.end());
+                return ret;
+            }
+        }
+
+        // Step 2. Choose any minterm.
+        std::vector<std::vector<Atom> > rets;
+        rets.resize(primes.size());
+        size_t min = 0;
+        for (size_t i = 0; i < primes.size(); ++i) {
+            size_t prime_found = i;
+            rets[i].push_back(primes[prime_found]);
+            MatchTable next;
+            for (size_t j = 0; j < minterms.size(); ++j) {
+                if (!checked[j][prime_found]) {
+                    next.minterms.push_back(minterms[j]);
+                }
+            }
+            for (size_t j = 0; j < primes.size(); ++j) {
+                if (j != prime_found) {
+                    next.primes.push_back(primes[j]);
+                }
+            }
+            next.ConstructCheckList();
+            std::vector<Atom> append(next.GetAnswer());
+            rets[i].insert(rets[i].cend(), append.begin(), append.end());
+            if (rets[i].size() < rets[min].size()) {
+                min = i;
+            }
+        }
+
+        return rets[min];
+
+    }
+
+    void Print() {
+        std::cout << "Primes:" << std::endl;
+        for (auto& prime : primes) {
+            std::cout << prime << std::endl;
+        }
+        std::cout << "Minterms:" << std::endl;
+        for (auto& minterm : minterms) {
+            std::cout << minterm << std::endl;
+        }
+
+        for (size_t i = 0; i < checked.size(); ++i) {
+            for (size_t j = 0; j < primes.size(); ++j) {
+                std::cout << (checked[i][j] ? 'c' : ' ');
+            }
+            std::cout << std::endl;
+        }
+    }
+
+};
+
+
 class QM {
 public:
     QM(int num_of_vars,
@@ -81,7 +195,6 @@ public:
         columns.resize(num_of_vars + 1);
 
         for (size_t i = 0; i < columns.size(); ++i) {
-
             // columns[i].groups.resize(columns.size() - i); // should be better.
             columns[i].groups.resize(columns.size());
 
@@ -92,23 +205,44 @@ public:
             Atom atom(minterms[i]);
             int count = atom.count();
             columns[0].groups[count].atoms.push_back(atom);
+            min_terms.push_back(atom);
         }
 
         for (size_t i = 0; i < dontcares.size(); ++i) {
             Atom atom(dontcares[i]);
             int count = atom.count();
             columns[0].groups[count].atoms.push_back(atom);
+            dont_cares.push_back(atom);
         }
 
-        //std::cout << columns[0];
-
-        //std::cout << (columns[0].groups[1].atoms[0] | columns[0].groups[1].atoms[1]) << std::endl;
-        //std::cout << Merge(columns[0].groups[0].atoms[0], columns[0].groups[1].atoms[0]) << std::endl;
-
-        ConstructColumn(0);
-        ConstructColumn(1);
+        for (size_t i = 0; i < length; ++i) {
+            ConstructColumn(i);
+        }
 
         std::cout << columns[0] << columns[1] << columns[2];
+
+        MatchTable match_table;
+        for (auto& minterm : min_terms) {
+            match_table.minterms.push_back(minterm);
+        }
+        for (auto& column : columns) {
+            for (auto& group : column.groups) {
+                for (auto& atom : group.atoms) {
+                    if (atom.flag == 0) {
+                        match_table.primes.push_back(atom);
+                    }
+                }
+            }
+        }
+        match_table.ConstructCheckList();
+        match_table.Print();
+
+        auto answer = match_table.GetAnswer();
+        std::cout << "Answer:" << std::endl;
+        for (auto& atom : answer) {
+            std::cout << atom << std::endl;
+        }
+        std::cout << std::endl;
     }
 
     void ConstructColumn(size_t from) {
@@ -139,19 +273,49 @@ public:
 
     int num_of_vars;
     std::vector<Column> columns;
-
+    std::vector<Atom> min_terms;
+    std::vector<Atom> dont_cares;
     
 };
 
 
-
 int main() {
-    int num_of_vars = 4;
-    int num_of_minterms = 7;
-    int num_of_dontcares = 3;
 
-    std::vector<int> minterms = { 4, 5, 6, 8, 9, 10, 13 };
-    std::vector<int> dontcares = { 0, 7, 15 };
+    size_t num_of_vars;// = 5;
+    size_t num_of_minterms;// = 7;
+    size_t num_of_dontcares;// = 3;
+
+    std::vector<int> minterms;
+    std::vector<int> dontcares;
+
+    std::cout << "Number of variables = ";
+    std::cin >> num_of_vars;
+    length = num_of_vars;
+
+    std::cout << "Number of minterms = ";
+    std::cin >> num_of_minterms;
+    
+    std::cout << "Input minterms: ";
+    for (size_t i = 0; i < num_of_minterms; ++i) {
+        int minterm;
+        std::cin >> minterm;
+        minterms.push_back(minterm);
+    }
+    
+    std::cout << "Number of dont't cares = ";
+    std::cin >> num_of_dontcares;
+
+    for (size_t i = 0; i < num_of_dontcares; ++i) {
+        int dontcare;
+        std::cin >> dontcare;
+        dontcares.push_back(dontcare);
+    }
+
+    //std::vector<int> minterms = { 4, 5, 6, 8, 9, 10, 13 };
+    //std::vector<int> dontcares = { 0, 7, 15 };
+
+    //std::vector<int> minterms = { 2, 3, 7, 10, 12, 15, 27 };
+    //std::vector<int> dontcares = { 5, 18, 19, 21, 23 };
     QM qm(num_of_vars, minterms, dontcares);
 
     return 0;
